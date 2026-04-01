@@ -20,4 +20,5 @@ def serve(
 def version() -> None:
     """Show version."""
     from simpli_sentiment import __version__
+
     typer.echo(f"simpli-sentiment {__version__}")
