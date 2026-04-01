@@ -19,3 +19,13 @@ env/
 htmlcov/
 .coverage
 coverage.xml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
