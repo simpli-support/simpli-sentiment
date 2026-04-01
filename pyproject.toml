@@ -12,21 +12,31 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "typer>=0.15",
     "pydantic>=2.10",
-    "httpx>=0.28",
+    "pydantic-settings>=2.6",
     "structlog>=24.4",
-    "python-dotenv>=1.0",
-    "transformers>=4.46",
-    "spacy>=3.8",
-    "sqlalchemy>=2.0",
-    "alembic>=1.14",
-    "redis>=5.2",
-    "torch>=2.5",
 ]
 
 [project.optional-dependencies]
+ml = [
+    "transformers>=4.46",
+    "spacy>=3.8",
+    "torch>=2.5",
+]
+db = [
+    "sqlalchemy>=2.0",
+    "alembic>=1.14",
+]
+cache = [
+    "redis>=5.2",
+]
+all = [
+    "simpli-sentiment[ml,db,cache]",
+    "httpx>=0.28",
+]
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
     "httpx>=0.28",
     "ruff>=0.8",
     "mypy>=1.13",
@@ -45,6 +55,9 @@ select = ["E", "F", "I", "N", "W", "UP", "B", "SIM"]
 [tool.mypy]
 strict = true
 python_version = "3.11"
+ignore_missing_imports = true
+disallow_subclassing_any = false
+disallow_untyped_decorators = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
