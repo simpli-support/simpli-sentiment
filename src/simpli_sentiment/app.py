@@ -9,6 +9,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from simpli_core import Channel
 
 logger = structlog.get_logger()
 
@@ -159,7 +160,7 @@ class AnalyzeRequest(BaseModel):
         ..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9\-_]{0,63}$"
     )
     text: str = Field(..., min_length=1, max_length=10000)
-    channel: str | None = Field(default=None, max_length=64)
+    channel: Channel | None = Field(default=None)
 
 
 class SentimentResult(BaseModel):

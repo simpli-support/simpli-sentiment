@@ -14,7 +14,7 @@ def serve(
     port: int = typer.Option(settings.app_port, help="Bind port"),
     reload: bool = typer.Option(False, help="Enable auto-reload"),
     workers: int = typer.Option(settings.workers, help="Number of worker processes"),
-    log_level: str = typer.Option(settings.log_level, help="Log level"),
+    log_level: str = typer.Option(settings.app_log_level, help="Log level"),
 ) -> None:
     """Start the API server."""
     uvicorn.run(
