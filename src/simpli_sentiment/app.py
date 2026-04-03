@@ -5,26 +5,21 @@ import uuid
 from datetime import UTC, datetime
 
 import structlog
-from fastapi import FastAPI, Query, Request
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from simpli_core import Channel
+
+from simpli_core import Channel, create_app
+from simpli_sentiment.settings import settings
 
 logger = structlog.get_logger()
 
-app = FastAPI(
+app = create_app(
     title="Simpli Sentiment",
     version="0.1.0",
     description="Customer health and sentiment tracker with escalation risk detection",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    settings=settings,
+    cors_origins="*",
 )
 
 # ---------------------------------------------------------------------------
@@ -197,29 +192,6 @@ class ErrorResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Middleware
-# ---------------------------------------------------------------------------
-
-
-@app.middleware("http")
-async def request_logging_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
-    request_id = str(uuid.uuid4())
-    structlog.contextvars.clear_contextvars()
-    structlog.contextvars.bind_contextvars(request_id=request_id)
-
-    logger.info("request_started", method=request.method, path=request.url.path)
-    response = await call_next(request)
-    logger.info(
-        "request_completed",
-        method=request.method,
-        path=request.url.path,
-        status_code=response.status_code,
-    )
-    response.headers["X-Request-ID"] = request_id
-    return response
-
-
-# ---------------------------------------------------------------------------
 # Exception handlers
 # ---------------------------------------------------------------------------
 
@@ -350,8 +322,3 @@ async def get_alerts(
 
     paginated = filtered[offset : offset + limit]
     return [Alert(**a) for a in paginated]
-
-
-@app.get("/health", tags=["system"])
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
