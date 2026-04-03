@@ -11,7 +11,11 @@ client = TestClient(app)
 
 
 def test_ingest_csv() -> None:
-    csv_content = "customer_id,text\ncust-1,This product is terrible\ncust-2,Great service thanks\n"
+    csv_content = (
+        "customer_id,text\n"
+        "cust-1,This product is terrible\n"
+        "cust-2,Great service thanks\n"
+    )
     file = io.BytesIO(csv_content.encode())
     response = client.post(
         "/api/v1/ingest",

@@ -10,7 +10,6 @@ import structlog
 from fastapi import File, Form, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-
 from simpli_core import Channel, create_app
 from simpli_core.connectors import (
     FieldMapping,
@@ -19,6 +18,7 @@ from simpli_core.connectors import (
     apply_mappings,
 )
 from simpli_core.connectors.mapping import COMMENT_TO_MESSAGE
+
 from simpli_sentiment.settings import settings
 
 logger = structlog.get_logger()
@@ -361,7 +361,7 @@ class IngestResult(BaseModel):
 
 @app.post("/api/v1/ingest", response_model=IngestResult, tags=["ingest"])
 async def ingest_file(
-    file: UploadFile = File(...),
+    file: UploadFile = File(...),  # noqa: B008
     mappings: str | None = Form(default=None),
 ) -> IngestResult:
     """Ingest messages from a file and analyze sentiment for each one."""
@@ -384,7 +384,10 @@ async def ingest_salesforce(request: SalesforceIngestRequest) -> IngestResult:
     if not all([instance_url, client_id, client_secret]):
         return JSONResponse(  # type: ignore[return-value]
             status_code=400,
-            content={"detail": "Salesforce credentials required (instance_url, client_id, client_secret)"},
+            content={
+                "detail": "Salesforce credentials required"
+                " (instance_url, client_id, client_secret)"
+            },
         )
 
     connector = SalesforceConnector(
@@ -423,7 +426,9 @@ async def _process_records(
     for i, record in enumerate(mapped):
         try:
             text = record.get("body", record.get("text", record.get("content", "")))
-            customer_id = record.get("author_id", record.get("customer_id", f"ingest-{i}"))
+            customer_id = record.get(
+                "author_id", record.get("customer_id", f"ingest-{i}")
+            )
             req = AnalyzeRequest(customer_id=customer_id, text=text)
             result = await analyze(req)
             results.append(result.model_dump())
