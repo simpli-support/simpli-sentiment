@@ -1,15 +1,24 @@
 """FastAPI application."""
 
+import json as json_module
 import re
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 import structlog
-from fastapi import Query, Request
+from fastapi import File, Form, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from simpli_core import Channel, create_app
+from simpli_core.connectors import (
+    FieldMapping,
+    FileConnector,
+    SalesforceConnector,
+    apply_mappings,
+)
+from simpli_core.connectors.mapping import COMMENT_TO_MESSAGE
 from simpli_sentiment.settings import settings
 
 logger = structlog.get_logger()
@@ -322,3 +331,108 @@ async def get_alerts(
 
     paginated = filtered[offset : offset + limit]
     return [Alert(**a) for a in paginated]
+
+
+# ---------------------------------------------------------------------------
+# Ingest models
+# ---------------------------------------------------------------------------
+
+
+class SalesforceIngestRequest(BaseModel):
+    instance_url: str = ""
+    client_id: str = ""
+    client_secret: str = ""
+    soql_where: str = ""
+    limit: int = Field(default=100, ge=1, le=10000)
+    mappings: list[FieldMapping] | None = None
+
+
+class IngestResult(BaseModel):
+    total: int
+    processed: int
+    results: list[dict[str, Any]]
+    errors: list[dict[str, Any]] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Ingest routes
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/v1/ingest", response_model=IngestResult, tags=["ingest"])
+async def ingest_file(
+    file: UploadFile = File(...),
+    mappings: str | None = Form(default=None),
+) -> IngestResult:
+    """Ingest messages from a file and analyze sentiment for each one."""
+    records = FileConnector.parse(file.file, format=_detect_format(file.filename))
+
+    field_mappings: list[FieldMapping] | None = None
+    if mappings:
+        field_mappings = [FieldMapping(**m) for m in json_module.loads(mappings)]
+
+    return await _process_records(records, field_mappings, apply_defaults=False)
+
+
+@app.post("/api/v1/ingest/salesforce", response_model=IngestResult, tags=["ingest"])
+async def ingest_salesforce(request: SalesforceIngestRequest) -> IngestResult:
+    """Pull case comments from Salesforce and analyze sentiment."""
+    instance_url = request.instance_url or settings.salesforce_instance_url
+    client_id = request.client_id or settings.salesforce_client_id
+    client_secret = request.client_secret or settings.salesforce_client_secret
+
+    if not all([instance_url, client_id, client_secret]):
+        return JSONResponse(  # type: ignore[return-value]
+            status_code=400,
+            content={"detail": "Salesforce credentials required (instance_url, client_id, client_secret)"},
+        )
+
+    connector = SalesforceConnector(
+        instance_url=instance_url,
+        client_id=client_id,
+        client_secret=client_secret,
+    )
+    records = connector.get_cases(where=request.soql_where, limit=request.limit)
+
+    return await _process_records(records, request.mappings)
+
+
+def _detect_format(filename: str | None) -> str:
+    if not filename:
+        return "csv"
+    suffix = filename.rsplit(".", 1)[-1].lower() if "." in filename else "csv"
+    return suffix if suffix in FileConnector.SUPPORTED_FORMATS else "csv"
+
+
+async def _process_records(
+    records: list[dict[str, Any]],
+    custom_mappings: list[FieldMapping] | None,
+    *,
+    apply_defaults: bool = True,
+) -> IngestResult:
+    if custom_mappings:
+        mapped = apply_mappings(records, custom_mappings)
+    elif apply_defaults:
+        mapped = apply_mappings(records, COMMENT_TO_MESSAGE)
+    else:
+        mapped = records
+
+    results: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+
+    for i, record in enumerate(mapped):
+        try:
+            text = record.get("body", record.get("text", record.get("content", "")))
+            customer_id = record.get("author_id", record.get("customer_id", f"ingest-{i}"))
+            req = AnalyzeRequest(customer_id=customer_id, text=text)
+            result = await analyze(req)
+            results.append(result.model_dump())
+        except Exception as exc:
+            errors.append({"index": i, "error": str(exc), "record": record})
+
+    return IngestResult(
+        total=len(records),
+        processed=len(results),
+        results=results,
+        errors=errors,
+    )
