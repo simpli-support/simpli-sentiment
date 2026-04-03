@@ -42,6 +42,9 @@ dev = [
 [project.scripts]
 simpli-sentiment = "simpli_sentiment.cli:app"
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.ruff]
 line-length = 88
 target-version = "py311"
