@@ -5,6 +5,8 @@ from simpli_core.settings import SimpliSettings
 
 
 class Settings(SimpliSettings, SalesforceSettings):
+    app_port: int = 8006
+
     workers: int = 1
 
     # Optional integrations

@@ -9,8 +9,8 @@ description = "Customer health and sentiment tracker that detects escalation ris
 requires-python = ">=3.11"
 dependencies = [
     "simpli-core @ git+https://github.com/simpli-support/simpli-core.git",
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.32",
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.32,<1.0",
 ]
 
 [project.optional-dependencies]
