@@ -6,21 +6,23 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+import litellm
 import structlog
 from fastapi import File, Form, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from simpli_core import Channel, create_app
+from simpli_core import Channel, CostTracker, create_app
 from simpli_core.connectors import (
     FieldMapping,
     FileConnector,
     SalesforceConnector,
     apply_mappings,
 )
-from simpli_core.connectors.mapping import COMMENT_TO_MESSAGE
+from simpli_core.connectors.mapping import CASE_TO_TICKET, COMMENT_TO_MESSAGE
 
 from simpli_sentiment.settings import settings
 
+cost_tracker = CostTracker()
 logger = structlog.get_logger()
 
 app = create_app(
@@ -29,6 +31,7 @@ app = create_app(
     description="Customer health and sentiment tracker with escalation risk detection",
     settings=settings,
     cors_origins="*",
+    cost_tracker=cost_tracker,
 )
 
 # ---------------------------------------------------------------------------
@@ -161,43 +164,54 @@ _alerts_store: list[dict[str, str]] = []
 
 class AnalyzeRequest(BaseModel):
     customer_id: str = Field(
-        ..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9\-_]{0,63}$"
+        ...,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9\-_]{0,63}$",
+        description="Unique customer identifier (alphanumeric, hyphens, underscores).",
     )
-    text: str = Field(..., min_length=1, max_length=10000)
-    channel: Channel | None = Field(default=None)
+    text: str = Field(
+        ...,
+        min_length=1,
+        max_length=10000,
+        description="Message or conversation text to analyze.",
+    )
+    channel: Channel | None = Field(
+        default=None, description="Communication channel the message originated from."
+    )
 
 
 class SentimentResult(BaseModel):
-    score: float
-    label: str
-    escalation_risk: float
-    triggers: list[str]
+    score: float = Field(description="Sentiment score from -1.0 (very negative) to 1.0 (very positive).")
+    label: str = Field(description="Sentiment label: positive, negative, or neutral.")
+    escalation_risk: float = Field(description="Escalation risk score from 0.0 to 1.0.")
+    triggers: list[str] = Field(description="Keywords or phrases that indicate escalation risk.")
 
 
 class SentimentTimepoint(BaseModel):
-    timestamp: str
-    score: float
-    label: str
-    source: str
+    timestamp: str = Field(description="ISO 8601 timestamp of this data point.")
+    score: float = Field(description="Sentiment score at this point in time.")
+    label: str = Field(description="Sentiment label at this point in time.")
+    source: str = Field(description="Source channel or origin of the analyzed message.")
 
 
 class CustomerSentiment(BaseModel):
-    customer_id: str
-    current_score: float
-    trend: str
-    timeline: list[SentimentTimepoint]
+    customer_id: str = Field(description="Unique customer identifier.")
+    current_score: float = Field(description="Most recent sentiment score for this customer.")
+    trend: str = Field(description="Sentiment trend: improving, declining, or stable.")
+    timeline: list[SentimentTimepoint] = Field(description="Chronological sentiment data points.")
 
 
 class Alert(BaseModel):
-    id: str
-    customer_id: str
-    severity: str
-    reason: str
-    created_at: str
+    id: str = Field(description="Unique alert identifier.")
+    customer_id: str = Field(description="Customer who triggered the alert.")
+    severity: str = Field(description="Alert severity level: low, medium, or high.")
+    reason: str = Field(description="Human-readable explanation of why the alert was raised.")
+    created_at: str = Field(description="ISO 8601 timestamp when the alert was created.")
 
 
 class ErrorResponse(BaseModel):
-    detail: str
+    detail: str = Field(description="Human-readable error message.")
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +234,7 @@ async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse
     response_model=CustomerSentiment,
     responses={404: {"model": ErrorResponse}},
     tags=["customers"],
+    summary="Get sentiment timeline for a customer",
 )
 async def get_customer_sentiment(
     customer_id: str,
@@ -273,12 +288,65 @@ async def get_customer_sentiment(
     "/analyze",
     response_model=SentimentResult,
     tags=["analysis"],
+    summary="Analyze sentiment of a message or conversation",
 )
 async def analyze(request: AnalyzeRequest) -> SentimentResult:
     """Analyze sentiment of a message or conversation."""
-    score, triggers = _analyze_text(request.text)
-    label = _score_to_label(score)
-    risk = _escalation_risk(score, triggers)
+    try:
+        system_prompt = (
+            "You are a sentiment analyzer for customer support messages. "
+            "Analyze the emotional tone, frustration level, and escalation risk. "
+            "Return JSON with exactly these keys:\n"
+            '- "score": float from -1.0 (very negative) to 1.0 (very positive)\n'
+            '- "label": one of "positive", "negative", or "neutral"\n'
+            '- "escalation_risk": float from 0.0 (no risk) to 1.0 (certain escalation)\n'
+            '- "triggers": list of specific phrases from the text that indicate '
+            "escalation risk\n\n"
+            "Consider tone, urgency, frustration, threats (cancellation, legal, "
+            "social media), and implicit sentiment — not just keywords. "
+            "ALL CAPS text indicates shouting/anger. "
+            "Multiple exclamation marks indicate strong emotion.\n\n"
+            "Return ONLY the JSON object."
+        )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": request.text},
+        ]
+
+        response = await litellm.acompletion(
+            model=settings.litellm_model,
+            messages=messages,
+            temperature=0.1,
+        )
+        cost_tracker.record_from_response(settings.litellm_model, response)
+
+        raw = response.choices[0].message.content.strip()
+
+        # Try to extract JSON — handle fenced blocks or embedded JSON objects
+        cleaned = raw
+        fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
+        if fence_match:
+            cleaned = fence_match.group(1)
+        else:
+            brace_match = list(
+                re.finditer(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", cleaned, re.DOTALL)
+            )
+            if brace_match:
+                cleaned = brace_match[-1].group(0)
+
+        parsed = json_module.loads(cleaned)
+
+        score = max(-1.0, min(1.0, float(parsed.get("score", 0.0))))
+        label = parsed.get("label", _score_to_label(score))
+        risk = max(0.0, min(1.0, float(parsed.get("escalation_risk", 0.0))))
+        triggers = parsed.get("triggers", [])
+
+    except Exception:
+        logger.warning("llm_sentiment_failed, falling back to keyword analysis")
+        score, triggers = _analyze_text(request.text)
+        label = _score_to_label(score)
+        risk = _escalation_risk(score, triggers)
 
     now = datetime.now(UTC).isoformat()
     entry: dict[str, str | float] = {
@@ -315,6 +383,7 @@ async def analyze(request: AnalyzeRequest) -> SentimentResult:
     "/alerts",
     response_model=list[Alert],
     tags=["alerts"],
+    summary="Get active escalation risk alerts",
 )
 async def get_alerts(
     severity: str | None = Query(default=None, pattern=r"^(low|medium|high)$"),
@@ -339,19 +408,33 @@ async def get_alerts(
 
 
 class SalesforceIngestRequest(BaseModel):
-    instance_url: str = ""
-    client_id: str = ""
-    client_secret: str = ""
-    soql_where: str = ""
-    limit: int = Field(default=100, ge=1, le=10000)
-    mappings: list[FieldMapping] | None = None
+    instance_url: str = Field(
+        default="", description="Salesforce instance URL; uses server default if empty."
+    )
+    client_id: str = Field(
+        default="", description="OAuth2 client ID; uses server default if empty."
+    )
+    client_secret: str = Field(
+        default="", description="OAuth2 client secret; uses server default if empty."
+    )
+    soql_where: str = Field(
+        default="", description="Optional SOQL WHERE clause to filter records."
+    )
+    limit: int = Field(
+        default=100, ge=1, le=10000, description="Maximum number of records to fetch."
+    )
+    mappings: list[FieldMapping] | None = Field(
+        default=None, description="Custom field mappings; uses defaults if not provided."
+    )
 
 
 class IngestResult(BaseModel):
-    total: int
-    processed: int
-    results: list[dict[str, Any]]
-    errors: list[dict[str, Any]] = Field(default_factory=list)
+    total: int = Field(description="Total number of records received.")
+    processed: int = Field(description="Number of records successfully processed.")
+    results: list[dict[str, Any]] = Field(description="Per-record processing results.")
+    errors: list[dict[str, Any]] = Field(
+        default_factory=list, description="Records that failed processing."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +442,7 @@ class IngestResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@app.post("/api/v1/ingest", response_model=IngestResult, tags=["ingest"])
+@app.post("/api/v1/ingest", response_model=IngestResult, tags=["ingest"], summary="Ingest messages from a file and analyze sentiment")
 async def ingest_file(
     file: UploadFile = File(...),  # noqa: B008
     mappings: str | None = Form(default=None),
@@ -374,7 +457,7 @@ async def ingest_file(
     return await _process_records(records, field_mappings, apply_defaults=False)
 
 
-@app.post("/api/v1/ingest/salesforce", response_model=IngestResult, tags=["ingest"])
+@app.post("/api/v1/ingest/salesforce", response_model=IngestResult, tags=["ingest"], summary="Ingest cases from Salesforce and analyze sentiment")
 async def ingest_salesforce(request: SalesforceIngestRequest) -> IngestResult:
     """Pull case comments from Salesforce and analyze sentiment."""
     instance_url = request.instance_url or settings.salesforce_instance_url
@@ -414,9 +497,9 @@ async def _process_records(
     apply_defaults: bool = True,
 ) -> IngestResult:
     if custom_mappings:
-        mapped = apply_mappings(records, custom_mappings)
+        mapped = apply_mappings(records, custom_mappings, preserve_unmapped=settings.preserve_unmapped_fields)
     elif apply_defaults:
-        mapped = apply_mappings(records, COMMENT_TO_MESSAGE)
+        mapped = apply_mappings(records, CASE_TO_TICKET, preserve_unmapped=settings.preserve_unmapped_fields)
     else:
         mapped = records
 
@@ -425,7 +508,19 @@ async def _process_records(
 
     for i, record in enumerate(mapped):
         try:
-            text = record.get("body", record.get("text", record.get("content", "")))
+            subject = record.get("subject", "")
+            description = (
+                record.get("description")
+                or record.get("body")
+                or record.get("content")
+                or record.get("text")
+                or ""
+            )
+            text = (
+                f"Subject: {subject}\n\n{description}".strip()
+                if subject and description
+                else (description or subject or "")
+            )
             customer_id = record.get(
                 "author_id", record.get("customer_id", f"ingest-{i}")
             )
