@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "simpli-core @ git+https://github.com/simpli-support/simpli-core.git",
     "fastapi>=0.115,<1.0",
+    "litellm>=1.50",
     "python-multipart>=0.0.9",
     "uvicorn[standard]>=0.32,<1.0",
 ]
