@@ -467,7 +467,7 @@ async def ingest_file(
     mappings: str | None = Form(default=None),
 ) -> IngestResult:
     """Ingest messages from a file and analyze sentiment for each one."""
-    records = FileConnector.parse(file.file, format=_detect_format(file.filename))
+    records = FileConnector.parse(file.file, fmt=_detect_format(file.filename))
 
     field_mappings: list[FieldMapping] | None = None
     if mappings:
