@@ -18,7 +18,7 @@ from simpli_core.connectors import (
     SalesforceConnector,
     apply_mappings,
 )
-from simpli_core.connectors.mapping import CASE_TO_TICKET, COMMENT_TO_MESSAGE
+from simpli_core.connectors.mapping import CASE_TO_TICKET
 
 from simpli_sentiment.settings import settings
 
@@ -182,10 +182,14 @@ class AnalyzeRequest(BaseModel):
 
 
 class SentimentResult(BaseModel):
-    score: float = Field(description="Sentiment score from -1.0 (very negative) to 1.0 (very positive).")
+    score: float = Field(
+        description="Sentiment score from -1.0 (very negative) to 1.0 (very positive)."
+    )
     label: str = Field(description="Sentiment label: positive, negative, or neutral.")
     escalation_risk: float = Field(description="Escalation risk score from 0.0 to 1.0.")
-    triggers: list[str] = Field(description="Keywords or phrases that indicate escalation risk.")
+    triggers: list[str] = Field(
+        description="Keywords or phrases that indicate escalation risk."
+    )
 
 
 class SentimentTimepoint(BaseModel):
@@ -197,17 +201,25 @@ class SentimentTimepoint(BaseModel):
 
 class CustomerSentiment(BaseModel):
     customer_id: str = Field(description="Unique customer identifier.")
-    current_score: float = Field(description="Most recent sentiment score for this customer.")
+    current_score: float = Field(
+        description="Most recent sentiment score for this customer."
+    )
     trend: str = Field(description="Sentiment trend: improving, declining, or stable.")
-    timeline: list[SentimentTimepoint] = Field(description="Chronological sentiment data points.")
+    timeline: list[SentimentTimepoint] = Field(
+        description="Chronological sentiment data points."
+    )
 
 
 class Alert(BaseModel):
     id: str = Field(description="Unique alert identifier.")
     customer_id: str = Field(description="Customer who triggered the alert.")
     severity: str = Field(description="Alert severity level: low, medium, or high.")
-    reason: str = Field(description="Human-readable explanation of why the alert was raised.")
-    created_at: str = Field(description="ISO 8601 timestamp when the alert was created.")
+    reason: str = Field(
+        description="Human-readable explanation of why the alert was raised."
+    )
+    created_at: str = Field(
+        description="ISO 8601 timestamp when the alert was created."
+    )
 
 
 class ErrorResponse(BaseModel):
@@ -299,7 +311,8 @@ async def analyze(request: AnalyzeRequest) -> SentimentResult:
             "Return JSON with exactly these keys:\n"
             '- "score": float from -1.0 (very negative) to 1.0 (very positive)\n'
             '- "label": one of "positive", "negative", or "neutral"\n'
-            '- "escalation_risk": float from 0.0 (no risk) to 1.0 (certain escalation)\n'
+            '- "escalation_risk": float from 0.0 (no risk) '
+            "to 1.0 (certain escalation)\n"
             '- "triggers": list of specific phrases from the text that indicate '
             "escalation risk\n\n"
             "Consider tone, urgency, frustration, threats (cancellation, legal, "
@@ -424,7 +437,8 @@ class SalesforceIngestRequest(BaseModel):
         default=100, ge=1, le=10000, description="Maximum number of records to fetch."
     )
     mappings: list[FieldMapping] | None = Field(
-        default=None, description="Custom field mappings; uses defaults if not provided."
+        default=None,
+        description="Custom field mappings; uses defaults if not provided.",
     )
 
 
@@ -442,7 +456,12 @@ class IngestResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@app.post("/api/v1/ingest", response_model=IngestResult, tags=["ingest"], summary="Ingest messages from a file and analyze sentiment")
+@app.post(
+    "/api/v1/ingest",
+    response_model=IngestResult,
+    tags=["ingest"],
+    summary="Ingest messages from a file and analyze sentiment",
+)
 async def ingest_file(
     file: UploadFile = File(...),  # noqa: B008
     mappings: str | None = Form(default=None),
@@ -457,7 +476,12 @@ async def ingest_file(
     return await _process_records(records, field_mappings, apply_defaults=False)
 
 
-@app.post("/api/v1/ingest/salesforce", response_model=IngestResult, tags=["ingest"], summary="Ingest cases from Salesforce and analyze sentiment")
+@app.post(
+    "/api/v1/ingest/salesforce",
+    response_model=IngestResult,
+    tags=["ingest"],
+    summary="Ingest cases from Salesforce and analyze sentiment",
+)
 async def ingest_salesforce(request: SalesforceIngestRequest) -> IngestResult:
     """Pull case comments from Salesforce and analyze sentiment."""
     instance_url = request.instance_url or settings.salesforce_instance_url
@@ -496,10 +520,11 @@ async def _process_records(
     *,
     apply_defaults: bool = True,
 ) -> IngestResult:
+    keep = settings.preserve_unmapped_fields
     if custom_mappings:
-        mapped = apply_mappings(records, custom_mappings, preserve_unmapped=settings.preserve_unmapped_fields)
+        mapped = apply_mappings(records, custom_mappings, preserve_unmapped=keep)
     elif apply_defaults:
-        mapped = apply_mappings(records, CASE_TO_TICKET, preserve_unmapped=settings.preserve_unmapped_fields)
+        mapped = apply_mappings(records, CASE_TO_TICKET, preserve_unmapped=keep)
     else:
         mapped = records
 
