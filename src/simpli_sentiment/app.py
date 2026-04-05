@@ -331,6 +331,7 @@ async def analyze(request: AnalyzeRequest) -> SentimentResult:
             model=settings.litellm_model,
             messages=messages,
             temperature=0.1,
+            timeout=60,
         )
         cost_tracker.record_from_response(settings.litellm_model, response)
 
