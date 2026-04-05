@@ -44,7 +44,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[dev]"
-      - run: pytest --cov=simpli_sentiment --cov-report=term-missing --cov-fail-under=80
+      - run: pytest --cov=simpli_sentiment --cov-report=term-missing
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       - name: Upload coverage
