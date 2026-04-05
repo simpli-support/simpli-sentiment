@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -29,6 +33,7 @@ jobs:
       - run: mypy src/
 
   test:
+    needs: [lint, typecheck]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -39,7 +44,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[dev]"
-      - run: pytest --cov=simpli_sentiment --cov-report=term-missing --cov-report=xml
+      - run: pytest --cov=simpli_sentiment --cov-report=term-missing --cov-fail-under=80
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       - name: Upload coverage
